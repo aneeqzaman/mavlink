@@ -82,18 +82,6 @@
 			    <param index="6">Empty</param>
 			    <param index="7">Empty</param>
 			</entry>
-			
-			<!-- nav/mission commands -->
-			<entry value="15" name="MAV_CMD_NAV_ORBIT_POI">  <!-- TODO: for future use instead of command ID 1 -->
-				<description>Orbit around a point for set amount of time</description>
-				<param index="3">Orbit radius around point, in meters.</param>
-				<param index="1">Loiter seconds (decimal)</param>
-				<param index="2">Max. horizontal speed</param>
-				<param index="4">Desired yaw angle.</param>
-				<param index="5">Latitude</param>
-				<param index="6">Longitude</param>
-				<param index="7">Altitude</param>
-			</entry>
 		</enum>
 	</enums>
 	<messages>
