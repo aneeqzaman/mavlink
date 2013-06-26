@@ -1,3 +1,16 @@
+## MAVLink for AutoQuad ##
+
+This repository hosts the current version of the MAVLink library specifically for AutoQuad (http://www.autoquad.org/).
+
+We try to keep the main MAVLink project updated with our definitions, but this is always going to contain our current working version.
+
+The necessary header files have been pre-generated in this repository. Just point your include directive to the *include/autoquad* folder.
+
+To re-generate the headers, simply run the aqgen.[bat|sh] script.
+
+
+Original Readme follows:
+
 ## MAVLink ##
 
 *   Website: http://qgroundcontrol.org/mavlink/
