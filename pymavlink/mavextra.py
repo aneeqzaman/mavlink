@@ -63,8 +63,9 @@ def mag_heading(RAW_IMU, ATTITUDE, declination=None, SENSOR_OFFSETS=None, ofs=No
 
     # go via a DCM matrix to match the APM calculation
     dcm_matrix = rotation(ATTITUDE)
+    cos_pitch_sq = 1.0-(dcm_matrix.c.x*dcm_matrix.c.x)
     headY = mag_y * dcm_matrix.c.z - mag_z * dcm_matrix.c.y
-    headX = mag_x + dcm_matrix.c.x * (headY - mag_x * dcm_matrix.c.x)
+    headX = mag_x * cos_pitch_sq - dcm_matrix.c.x * (mag_y * dcm_matrix.c.y + mag_z * dcm_matrix.c.z)
 
     heading = degrees(atan2(-headY,headX)) + declination
     if heading < 0:
@@ -493,17 +494,27 @@ def wingloading(bank):
     '''return expected wing loading factor for a bank angle in radians'''
     return 1.0/cos(bank)
 
-def airspeed(VFR_HUD, ratio=None):
+def airspeed(VFR_HUD, ratio=None, used_ratio=None):
     '''recompute airspeed with a different ARSPD_RATIO'''
     import mavutil
     mav = mavutil.mavfile_global
     if ratio is None:
         ratio = 1.9936 # APM default
-    if 'ARSPD_RATIO' in mav.params:
-        used_ratio = mav.params['ARSPD_RATIO']
-    else:
-        used_ratio = ratio
+    if used_ratio is None:
+        if 'ARSPD_RATIO' in mav.params:
+            used_ratio = mav.params['ARSPD_RATIO']
+        else:
+            print("no ARSPD_RATIO in mav.params")
+            used_ratio = ratio
     airspeed_pressure = (VFR_HUD.airspeed**2) / used_ratio
+    airspeed = sqrt(airspeed_pressure * ratio)
+    return airspeed
+
+def airspeed_ratio(VFR_HUD):
+    '''recompute airspeed with a different ARSPD_RATIO'''
+    import mavutil
+    mav = mavutil.mavfile_global
+    airspeed_pressure = (VFR_HUD.airspeed**2) / ratio
     airspeed = sqrt(airspeed_pressure * ratio)
     return airspeed
 
@@ -562,7 +573,12 @@ def yaw_rate(ATTITUDE):
     return psiDot
 
 
-def gps_velocity(GPS_RAW_INT):
+def gps_velocity(GLOBAL_POSITION_INT):
+    '''return GPS velocity vector'''
+    return Vector3(GLOBAL_POSITION_INT.vx, GLOBAL_POSITION_INT.vy, GLOBAL_POSITION_INT.vz) * 0.01
+
+
+def gps_velocity_old(GPS_RAW_INT):
     '''return GPS velocity vector'''
     return Vector3(GPS_RAW_INT.vel*0.01*cos(radians(GPS_RAW_INT.cog*0.01)),
                    GPS_RAW_INT.vel*0.01*sin(radians(GPS_RAW_INT.cog*0.01)), 0)
@@ -664,3 +680,109 @@ def wrap_180(angle):
     return angle
 
     
+def wrap_360(angle):
+    if angle > 360:
+        angle -= 360.0
+    if angle < 0:
+        angle += 360.0
+    return angle
+
+class DCM_State(object):
+    '''DCM state object'''
+    def __init__(self, roll, pitch, yaw):
+        self.dcm = Matrix3()
+        self.dcm2 = Matrix3()
+        self.dcm.from_euler(radians(roll), radians(pitch), radians(yaw))
+        self.dcm2.from_euler(radians(roll), radians(pitch), radians(yaw))
+        self.mag = Vector3()
+        self.gyro = Vector3()
+        self.accel = Vector3()
+        self.gps = None
+        self.rate = 50.0
+        self.kp = 0.2
+        self.kp_yaw = 0.3
+        self.omega_P = Vector3()
+        self.omega_P_yaw = Vector3()
+        self.omega_I = Vector3() # (-0.00199045287445, -0.00653007719666, -0.00714212376624)
+        self.omega_I_sum = Vector3()
+        self.omega_I_sum_time = 0
+        self.omega = Vector3()
+        self.ra_sum = Vector3()
+        self.last_delta_angle = Vector3()
+        self.last_velocity = Vector3()
+        (self.roll, self.pitch, self.yaw) = self.dcm.to_euler()
+        (self.roll2, self.pitch2, self.yaw2) = self.dcm2.to_euler()
+        
+    def update(self, gyro, accel, mag, GPS):
+        if self.gyro != gyro or self.accel != accel:
+            delta_angle = (gyro+self.omega_I) / self.rate
+            self.dcm.rotate(delta_angle)
+            correction = self.last_delta_angle % delta_angle
+            #print (delta_angle - self.last_delta_angle) * 58.0
+            corrected_delta = delta_angle + 0.0833333 * correction
+            self.dcm2.rotate(corrected_delta)
+            self.last_delta_angle = delta_angle
+
+            self.dcm.normalize()
+            self.dcm2.normalize()
+
+            self.gyro = gyro
+            self.accel = accel
+            (self.roll, self.pitch, self.yaw) = self.dcm.to_euler()
+            (self.roll2, self.pitch2, self.yaw2) = self.dcm2.to_euler()
+
+dcm_state = None
+
+def DCM_update(IMU, ATT, MAG, GPS):
+    '''implement full DCM system'''
+    global dcm_state
+    if dcm_state is None:
+        dcm_state = DCM_State(ATT.Roll, ATT.Pitch, ATT.Yaw)
+
+    mag   = Vector3(MAG.MagX, MAG.MagY, MAG.MagZ)
+    gyro  = Vector3(IMU.GyrX, IMU.GyrY, IMU.GyrZ)
+    accel = Vector3(IMU.AccX, IMU.AccY, IMU.AccZ)
+    accel2 = Vector3(IMU.AccX, IMU.AccY, IMU.AccZ)
+    dcm_state.update(gyro, accel, mag, GPS)
+    return dcm_state
+
+class PX4_State(object):
+    '''PX4 DCM state object'''
+    def __init__(self, roll, pitch, yaw, timestamp):
+        self.dcm = Matrix3()
+        self.dcm.from_euler(radians(roll), radians(pitch), radians(yaw))
+        self.gyro = Vector3()
+        self.accel = Vector3()
+        self.timestamp = timestamp
+        (self.roll, self.pitch, self.yaw) = self.dcm.to_euler()
+        
+    def update(self, gyro, accel, timestamp):
+        if self.gyro != gyro or self.accel != accel:
+            delta_angle = gyro * (timestamp - self.timestamp)
+            self.timestamp = timestamp
+            self.dcm.rotate(delta_angle)
+            self.dcm.normalize()
+            self.gyro = gyro
+            self.accel = accel
+            (self.roll, self.pitch, self.yaw) = self.dcm.to_euler()
+
+px4_state = None
+
+def PX4_update(IMU, ATT):
+    '''implement full DCM using PX4 native SD log data'''
+    global px4_state
+    if px4_state is None:
+        px4_state = PX4_State(degrees(ATT.Roll), degrees(ATT.Pitch), degrees(ATT.Yaw), IMU._timestamp)
+
+    gyro  = Vector3(IMU.GyroX, IMU.GyroY, IMU.GyroZ)
+    accel = Vector3(IMU.AccX, IMU.AccY, IMU.AccZ)
+    px4_state.update(gyro, accel, IMU._timestamp)
+    return px4_state
+
+_downsample_N = 0
+
+def downsample(N):
+    '''conditional that is true on every Nth sample'''
+    global _downsample_N
+    _downsample_N = (_downsample_N + 1) % N
+    return _downsample_N == 0
