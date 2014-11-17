@@ -105,6 +105,14 @@ def mag_field(RAW_IMU, SENSOR_OFFSETS=None, ofs=None):
         mag_z += ofs[2] - SENSOR_OFFSETS.mag_ofs_z
     return sqrt(mag_x**2 + mag_y**2 + mag_z**2)
 
+def mag_field_df(MAG, ofs=None):
+    '''calculate magnetic field strength from raw magnetometer (dataflash version)'''
+    mag = Vector3(MAG.MagX, MAG.MagY, MAG.MagZ)
+    offsets = Vector3(MAG.OfsX, MAG.OfsY, MAG.OfsZ)
+    if ofs is not None:
+        mag = (mag - offsets) + Vector3(ofs[0], ofs[1], ofs[2])
+    return mag.length()
+
 def get_motor_offsets(SERVO_OUTPUT_RAW, ofs, motor_ofs):
     '''calculate magnetic field strength from raw magnetometer'''
     import mavutil
@@ -444,7 +452,12 @@ def pitch_sim(SIMSTATE, GPS_RAW):
 
 def distance_two(GPS_RAW1, GPS_RAW2):
     '''distance between two points'''
-    if hasattr(GPS_RAW1, 'cog'):
+    if hasattr(GPS_RAW1, 'Lat'):
+        lat1 = radians(GPS_RAW1.Lat)
+        lat2 = radians(GPS_RAW2.Lat)
+        lon1 = radians(GPS_RAW1.Lng)
+        lon2 = radians(GPS_RAW2.Lng)
+    elif hasattr(GPS_RAW1, 'cog'):
         lat1 = radians(GPS_RAW1.lat)*1.0e-7
         lat2 = radians(GPS_RAW2.lat)*1.0e-7
         lon1 = radians(GPS_RAW1.lon)*1.0e-7
@@ -467,9 +480,11 @@ first_fix = None
 def distance_home(GPS_RAW):
     '''distance from first fix point'''
     global first_fix
-    if GPS_RAW.fix_type < 2:
+    if (hasattr(GPS_RAW, 'fix_type') and GPS_RAW.fix_type < 2) or \
+       (hasattr(GPS_RAW, 'Status')   and GPS_RAW.Status   < 2):
         return 0
-    if first_fix == None or first_fix.fix_type < 2:
+
+    if first_fix == None:
         first_fix = GPS_RAW
         return 0
     return distance_two(GPS_RAW, first_fix)
@@ -494,7 +509,7 @@ def wingloading(bank):
     '''return expected wing loading factor for a bank angle in radians'''
     return 1.0/cos(bank)
 
-def airspeed(VFR_HUD, ratio=None, used_ratio=None):
+def airspeed(VFR_HUD, ratio=None, used_ratio=None, offset=None):
     '''recompute airspeed with a different ARSPD_RATIO'''
     import mavutil
     mav = mavutil.mavfile_global
@@ -506,9 +521,23 @@ def airspeed(VFR_HUD, ratio=None, used_ratio=None):
         else:
             print("no ARSPD_RATIO in mav.params")
             used_ratio = ratio
-    airspeed_pressure = (VFR_HUD.airspeed**2) / used_ratio
+    if hasattr(VFR_HUD,'airspeed'):
+        airspeed = VFR_HUD.airspeed
+    else:
+        airspeed = VFR_HUD.Airspeed
+    airspeed_pressure = (airspeed**2) / used_ratio
+    if offset is not None:
+        airspeed_pressure += offset
+        if airspeed_pressure < 0:
+            airspeed_pressure = 0
     airspeed = sqrt(airspeed_pressure * ratio)
     return airspeed
+
+def EAS2TAS(ARSP,GPS,BARO,ground_temp=25):
+    '''EAS2TAS from ARSP.Temp'''
+    tempK = ground_temp + 273.15 - 0.0065 * GPS.Alt
+    return sqrt(1.225 / (BARO.Press / (287.26 * tempK)))
+
 
 def airspeed_ratio(VFR_HUD):
     '''recompute airspeed with a different ARSPD_RATIO'''
@@ -656,20 +685,20 @@ def rover_lat_accel(VFR_HUD, SERVO_OUTPUT_RAW):
     return accel
 
 
-def demix1(servo1, servo2):
+def demix1(servo1, servo2, gain=0.5):
     '''de-mix a mixed servo output'''
     s1 = servo1 - 1500
     s2 = servo2 - 1500
-    out1 = (s1+s2)/2
-    out2 = (s1-s2)/2
+    out1 = (s1+s2)*gain
+    out2 = (s1-s2)*gain
     return out1+1500
 
-def demix2(servo1, servo2):
+def demix2(servo1, servo2, gain=0.5):
     '''de-mix a mixed servo output'''
     s1 = servo1 - 1500
     s2 = servo2 - 1500
-    out1 = (s1+s2)/2
-    out2 = (s1-s2)/2
+    out1 = (s1+s2)*gain
+    out2 = (s1-s2)*gain
     return out2+1500
 
 def wrap_180(angle):
@@ -786,3 +815,109 @@ def downsample(N):
     global _downsample_N
     _downsample_N = (_downsample_N + 1) % N
     return _downsample_N == 0
+
+def armed(HEARTBEAT):
+    '''return 1 if armed, 0 if not'''
+    from pymavlink import mavutil
+    if HEARTBEAT.type == mavutil.mavlink.MAV_TYPE_GCS:
+        self = mavutil.mavfile_global
+        if self.motors_armed():
+            return 1
+        return 0
+    if HEARTBEAT.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:
+        return 1
+    return 0
+
+def rotation_df(ATT):
+    '''return the current DCM rotation matrix'''
+    r = Matrix3()
+    r.from_euler(radians(ATT.Roll), radians(ATT.Pitch), radians(ATT.Yaw))
+    return r
+
+def rotation2(AHRS2):
+    '''return the current DCM rotation matrix'''
+    r = Matrix3()
+    r.from_euler(AHRS2.roll, AHRS2.pitch, AHRS2.yaw)
+    return r
+
+def earth_accel2(RAW_IMU,ATTITUDE):
+    '''return earth frame acceleration vector from AHRS2'''
+    r = rotation2(ATTITUDE)
+    accel = Vector3(RAW_IMU.xacc, RAW_IMU.yacc, RAW_IMU.zacc) * 9.81 * 0.001
+    return r * accel
+
+def earth_accel_df(IMU,ATT):
+    '''return earth frame acceleration vector from df log'''
+    r = rotation_df(ATT)
+    accel = Vector3(IMU.AccX, IMU.AccY, IMU.AccZ)
+    return r * accel
+
+def earth_accel2_df(IMU,IMU2,ATT):
+    '''return earth frame acceleration vector from df log'''
+    r = rotation_df(ATT)
+    accel1 = Vector3(IMU.AccX, IMU.AccY, IMU.AccZ)
+    accel2 = Vector3(IMU2.AccX, IMU2.AccY, IMU2.AccZ)
+    accel = 0.5 * (accel1 + accel2)
+    return r * accel
+
+def gps_velocity_df(GPS):
+    '''return GPS velocity vector'''
+    vx = GPS.Spd * cos(radians(GPS.GCrs))
+    vy = GPS.Spd * sin(radians(GPS.GCrs))
+    return Vector3(vx, vy, GPS.VZ)
+
+def distance_gps2(GPS, GPS2):
+    '''distance between two points'''
+    if GPS.TimeMS != GPS2.TimeMS:
+        # reject messages not time aligned
+        return None
+    return distance_two(GPS, GPS2)
+
+
+radius_of_earth = 6378100.0 # in meters
+
+def wrap_valid_longitude(lon):
+  ''' wrap a longitude value around to always have a value in the range
+      [-180, +180) i.e 0 => 0, 1 => 1, -1 => -1, 181 => -179, -181 => 179
+  '''
+  return (((lon + 180.0) % 360.0) - 180.0)
+
+def gps_newpos(lat, lon, bearing, distance):
+  '''extrapolate latitude/longitude given a heading and distance
+  thanks to http://www.movable-type.co.uk/scripts/latlong.html
+  '''
+  import math
+  lat1 = math.radians(lat)
+  lon1 = math.radians(lon)
+  brng = math.radians(bearing)
+  dr = distance/radius_of_earth
+  
+  lat2 = math.asin(math.sin(lat1)*math.cos(dr) +
+                   math.cos(lat1)*math.sin(dr)*math.cos(brng))
+  lon2 = lon1 + math.atan2(math.sin(brng)*math.sin(dr)*math.cos(lat1), 
+                           math.cos(dr)-math.sin(lat1)*math.sin(lat2))
+  return (math.degrees(lat2), wrap_valid_longitude(math.degrees(lon2)))
+
+def gps_offset(lat, lon, east, north):
+  '''return new lat/lon after moving east/north
+  by the given number of meters'''
+  import math
+  bearing = math.degrees(math.atan2(east, north))
+  distance = math.sqrt(east**2 + north**2)
+  return gps_newpos(lat, lon, bearing, distance)
+
+ekf_home = None
+
+def ekf1_pos(EKF1):
+  '''calculate EKF position when EKF disabled'''
+  global ekf_home
+  from pymavlink import mavutil
+  self = mavutil.mavfile_global
+  if ekf_home is None:
+      if not 'GPS' in self.messages or self.messages['GPS'].Status != 3:
+          return None
+      ekf_home = self.messages['GPS']
+      (ekf_home.Lat, ekf_home.Lng) = gps_offset(ekf_home.Lat, ekf_home.Lng, -EKF1.PE, -EKF1.PN)
+  (lat,lon) = gps_offset(ekf_home.Lat, ekf_home.Lng, EKF1.PE, EKF1.PN)
+  return (lat, lon)
+
