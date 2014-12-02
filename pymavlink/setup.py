@@ -1,7 +1,7 @@
 from distutils.core import setup, Extension
 import glob, os, shutil, fnmatch
 
-version = '1.1.36'
+version = '1.1.38'
 
 from generator import mavgen, mavparse
 
@@ -54,6 +54,8 @@ setup (name = 'pymavlink',
        package_data = { 'pymavlink.dialects.v09' : ['*.xml'],
                         'pymavlink.dialects.v10' : ['*.xml'],
                         'pymavlink.generator'    : [ '*.xsd',
+                                                     'java/lib/*.*',
+                                                     'java/lib/Messages/*.*',
                                                      'C/include_v0.9/*.h',
                                                      'C/include_v1.0/*.h',
                                                      'C/include_v1.0/*.hpp' ],
