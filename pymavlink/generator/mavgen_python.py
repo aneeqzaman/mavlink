@@ -7,7 +7,7 @@ Released under GNU GPL version 3 or later
 '''
 
 import sys, textwrap, os
-import mavparse, mavtemplate
+from . import mavparse, mavtemplate
 
 t = mavtemplate.MAVTemplate()
 
@@ -122,7 +122,7 @@ class MAVLink_message(object):
         self._msgbuf = self._header.pack() + payload
         crc = x25crc(self._msgbuf[1:])
         if ${crc_extra}: # using CRC extra
-            crc.accumulate(chr(crc_extra))
+            crc.accumulate_str(chr(crc_extra))
         self._crc = crc.crc
         self._msgbuf += struct.pack('<H', self._crc)
         return self._msgbuf

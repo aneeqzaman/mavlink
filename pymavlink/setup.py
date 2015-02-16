@@ -1,7 +1,17 @@
+# Work around mbcs bug in distutils.
+# http://bugs.python.org/issue10945
+import codecs
+try:
+    codecs.lookup('mbcs')
+except LookupError:
+    ascii = codecs.lookup('ascii')
+    func = lambda name, enc=ascii: {True: enc}.get(name=='mbcs')
+    codecs.register(func)
+
 from distutils.core import setup, Extension
 import glob, os, shutil, fnmatch
 
-version = '1.1.38'
+version = '1.1.43'
 
 from generator import mavgen, mavparse
 
@@ -80,5 +90,8 @@ setup (name = 'pymavlink',
                    'tools/mavsigloss.py',
                    'tools/mavsearch.py',
                    'tools/mavtomfile.py',
-                   'generator/mavgen.py', 'tools/mavkml.py']
+                   'tools/mavgen.py',
+                   'tools/mavkml.py',
+                   'tools/mavsummarize.py',
+                   'tools/MPU6KSearch.py']
        )
